@@ -5,10 +5,11 @@ import (
 	"crypto/tls"
 	"fmt"
 	"log"
-	"net"
 	"net/http"
 
 	"github.com/caddyserver/certmagic"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
 // Server represents a server for HTTP and TLS.
@@ -18,23 +19,14 @@ type Server struct {
 	tlsAddr     string
 	tlsDisabled bool
 	tlsConfig   *tls.Config
+	logger      *zap.Logger
 }
 
 type ServerOption func(*Server)
 
 func NewServer(opts ...ServerOption) *Server {
-	// Configure default ACME manager for certificates.
-	certmagicConfig := certmagic.NewDefault()
-	certmagicConfig.OnDemand = &certmagic.OnDemandConfig{}
-	acmeManager := certmagic.NewACMEManager(certmagicConfig, certmagic.DefaultACME)
-
-	tlsConfig := certmagicConfig.TLSConfig()
-
 	srv := &Server{
-		acmeManager: acmeManager,
-		tlsConfig:   tlsConfig,
-		httpAddr:    ":80",
-		tlsAddr:     ":443",
+		logger: zap.NewNop(),
 	}
 
 	for _, opt := range opts {
@@ -42,6 +34,20 @@ func NewServer(opts ...ServerOption) *Server {
 	}
 
 	return srv
+}
+
+// WithHTTPAddr overrides the default TCP address for the HTTP server to listen on.
+func WithHTTPAddr(addr string) ServerOption {
+	return func(srv *Server) {
+		srv.httpAddr = addr
+	}
+}
+
+// WithTLSAddr overrides the default TCP address for the TLS server to listen on.
+func WithTLSAddr(addr string) ServerOption {
+	return func(srv *Server) {
+		srv.tlsAddr = addr
+	}
 }
 
 // WithACMEManager overrides the ACME manager used. If you call this function
@@ -67,6 +73,13 @@ func WithoutTLS() ServerOption {
 	}
 }
 
+// WithLogger provides a logger, which is used for HTTP related logs.
+func WithLogger(logger *zap.Logger) ServerOption {
+	return func(srv *Server) {
+		srv.logger = logger
+	}
+}
+
 // Run starts the HTTP and (if enabled) TLS server.
 func (srv *Server) Run(ctx context.Context) error {
 	handler := srv.Handler()
@@ -79,22 +92,25 @@ func (srv *Server) Run(ctx context.Context) error {
 		}
 	}()
 
-	ln, err := net.Listen("tcp", srv.tlsAddr)
-	if err != nil {
-		log.Fatalf("Error: Failed to create TLS listener: %v", err)
-	}
-	defer ln.Close()
-
 	if !srv.tlsDisabled {
 		// Configure TLS server.
 		httpServer := &http.Server{
+			Addr:      srv.tlsAddr,
 			Handler:   handler,
 			TLSConfig: srv.tlsConfig,
 		}
+		if srv.logger != nil {
+			logger, err := zap.NewStdLogAt(srv.logger, zapcore.DebugLevel)
+			if err != nil {
+				return fmt.Errorf("http: failed to create logger: %w", err)
+			}
+			httpServer.ErrorLog = logger
+		}
+
 		// Start TLS server.
-		err = httpServer.ServeTLS(ln, "", "")
+		err := httpServer.ListenAndServeTLS("", "")
 		if err != nil && err != http.ErrServerClosed {
-			return fmt.Errorf("http: HTTPS server failed: %w", err)
+			return fmt.Errorf("http: TLS server failed: %w", err)
 		}
 	}
 

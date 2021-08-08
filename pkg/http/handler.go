@@ -2,10 +2,10 @@ package http
 
 import (
 	"fmt"
-	"log"
 	"net/http"
 
 	"github.com/gorilla/mux"
+	"go.uber.org/zap"
 )
 
 func (srv *Server) Handler() http.Handler {
@@ -22,6 +22,10 @@ func (srv *Server) Handler() http.Handler {
 }
 
 func (srv Server) CaptureRequest(w http.ResponseWriter, r *http.Request) {
-	log.Printf("Captured incoming request (host: %v, url: %v)", r.Host, r.URL.String())
+	srv.logger.Info("Captured incoming request.",
+		zap.String("host", r.Host),
+		zap.String("url", r.URL.String()),
+	)
+
 	fmt.Fprintf(w, "host: %v, url: %v", r.Host, r.URL.String())
 }
