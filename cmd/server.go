@@ -10,17 +10,17 @@ import (
 	"github.com/mitchellh/go-homedir"
 	"github.com/spf13/cobra"
 	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
 
 	"github.com/dstotijn/edena/pkg/dns"
 	"github.com/dstotijn/edena/pkg/http"
 )
 
 var (
-	hostname string
-	httpAddr string
-	tlsAddr  string
-	dnsAddr  string
+	hostname    string
+	httpAddr    string
+	tlsAddr     string
+	dnsAddr     string
+	prettyPrint bool
 )
 
 func init() {
@@ -30,9 +30,10 @@ func init() {
 	serverCmd.Flags().StringVar(&httpAddr, "http", ":80",
 		`the TCP address for the HTTP server to listen on, in the form "host:port"`)
 	serverCmd.Flags().StringVar(&tlsAddr, "tls", ":443",
-		`the TCP address for the TLS server to listen on, in the form "host:port"`)
+		`the TCP address for the HTTPS server to listen on, in the form "host:port"`)
 	serverCmd.Flags().StringVar(&dnsAddr, "dns", ":53",
 		`the address for the DNS server to listen on, in the form "host:port"`)
+	serverCmd.Flags().BoolVar(&prettyPrint, "pretty-print", false, "use pretty log formatting")
 }
 
 var serverCmd = &cobra.Command{
@@ -41,11 +42,12 @@ var serverCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
 
-		config := zap.NewDevelopmentConfig()
-		config.Level.SetLevel(zap.InfoLevel)
-		config.EncoderConfig.EncodeLevel = zapcore.CapitalColorLevelEncoder
-		logger, _ := config.Build()
+		logger, err := newLogger(debug, prettyPrint)
+		if err != nil {
+			return err
+		}
 		defer logger.Sync()
+		serverLogger := logger.Named("server")
 
 		dataDir, err := dataDirectory()
 		if err != nil {
@@ -63,15 +65,17 @@ var serverCmd = &cobra.Command{
 			dns.WithStorage(storage),
 			dns.WithAddress(dnsAddr),
 			dns.WithSOAHostname(hostname),
+			dns.WithLogger(logger.Named("dns")),
 		)
 
 		// Configure default ACME manager for certificates.
+		certmagicLogger := logger.Named("certmagic")
 		certmagicConfig := certmagic.NewDefault()
 		certmagicConfig.Storage = storage
-		certmagicConfig.Logger = logger
+		certmagicConfig.Logger = certmagicLogger
 
 		acmeManager := certmagic.NewACMEManager(certmagicConfig, certmagic.ACMEManager{
-			Logger: logger,
+			Logger: certmagicLogger,
 			DNS01Solver: &certmagic.DNS01Solver{
 				DNSProvider: dnsServer,
 			},
@@ -81,7 +85,7 @@ var serverCmd = &cobra.Command{
 
 		tlsConfig := certmagicConfig.TLSConfig()
 
-		// Configure an http.Server, which orchestrates running HTTP and TLS servers.
+		// Configure an http.Server, which orchestrates running HTTP and HTTPS servers.
 		// We're use HTTP and TLS for:
 		// - Capturing requests
 		// - API and Web UI
@@ -92,6 +96,11 @@ var serverCmd = &cobra.Command{
 			http.WithHTTPAddr(httpAddr),
 			http.WithTLSAddr(tlsAddr),
 			http.WithLogger(logger.Named("http")),
+		)
+
+		serverLogger.Info("Running Edena ...",
+			zap.String("hostname", hostname),
+			zap.Bool("debug", debug),
 		)
 
 		go func() {

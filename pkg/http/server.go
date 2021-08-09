@@ -26,7 +26,9 @@ type ServerOption func(*Server)
 
 func NewServer(opts ...ServerOption) *Server {
 	srv := &Server{
-		logger: zap.NewNop(),
+		httpAddr: ":80",
+		tlsAddr:  ":443",
+		logger:   zap.NewNop(),
 	}
 
 	for _, opt := range opts {
@@ -43,7 +45,7 @@ func WithHTTPAddr(addr string) ServerOption {
 	}
 }
 
-// WithTLSAddr overrides the default TCP address for the TLS server to listen on.
+// WithTLSAddr overrides the default TCP address for the HTTPS server to listen on.
 func WithTLSAddr(addr string) ServerOption {
 	return func(srv *Server) {
 		srv.tlsAddr = addr
@@ -80,12 +82,13 @@ func WithLogger(logger *zap.Logger) ServerOption {
 	}
 }
 
-// Run starts the HTTP and (if enabled) TLS server.
+// Run starts the HTTP and (if enabled) HTTPS server.
 func (srv *Server) Run(ctx context.Context) error {
 	handler := srv.Handler()
 
 	// Start HTTP server.
 	go func() {
+		srv.logger.Info(fmt.Sprintf("HTTP server listening on %v ...", srv.httpAddr))
 		err := http.ListenAndServe(srv.httpAddr, handler)
 		if err != nil && err != http.ErrServerClosed {
 			log.Fatalf("Error: HTTP server failed: %v", err)
@@ -93,7 +96,7 @@ func (srv *Server) Run(ctx context.Context) error {
 	}()
 
 	if !srv.tlsDisabled {
-		// Configure TLS server.
+		// Configure HTTPS server.
 		httpServer := &http.Server{
 			Addr:      srv.tlsAddr,
 			Handler:   handler,
@@ -107,10 +110,11 @@ func (srv *Server) Run(ctx context.Context) error {
 			httpServer.ErrorLog = logger
 		}
 
-		// Start TLS server.
+		// Start HTTPS server.
+		srv.logger.Info(fmt.Sprintf("HTTPS server listening on %v ...", srv.tlsAddr))
 		err := httpServer.ListenAndServeTLS("", "")
 		if err != nil && err != http.ErrServerClosed {
-			return fmt.Errorf("http: TLS server failed: %w", err)
+			return fmt.Errorf("http: HTTPS server failed: %w", err)
 		}
 	}
 

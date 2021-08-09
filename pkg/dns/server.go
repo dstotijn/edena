@@ -12,6 +12,7 @@ import (
 	"github.com/caddyserver/certmagic"
 	"github.com/libdns/libdns"
 	"github.com/miekg/dns"
+	"go.uber.org/zap"
 )
 
 // Interface guards.
@@ -31,13 +32,15 @@ type Server struct {
 	storage     certmagic.Storage
 	addr        string
 	soaHostname string
+	logger      *zap.Logger
 }
 
 type ServerOption func(*Server)
 
 func NewServer(opts ...ServerOption) *Server {
 	srv := &Server{
-		addr: ":53",
+		addr:   ":53",
+		logger: zap.NewNop(),
 	}
 
 	for _, opt := range opts {
@@ -65,8 +68,16 @@ func WithSOAHostname(soaHostname string) ServerOption {
 	}
 }
 
+// WithLogger provides a logger, which is used for HTTP related logs.
+func WithLogger(logger *zap.Logger) ServerOption {
+	return func(srv *Server) {
+		srv.logger = logger
+	}
+}
+
 // Run starts the DNS server.
 func (srv *Server) Run(ctx context.Context) error {
+	srv.logger.Info(fmt.Sprintf("DNS server listening on %v ...", srv.addr))
 	go func() {
 		dnsServer := &dns.Server{
 			Addr:      srv.addr,
