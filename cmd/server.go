@@ -1,16 +1,24 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os"
+	"os/signal"
+	"path"
 	"path/filepath"
+	"sync"
+	"time"
 
 	"github.com/caddyserver/certmagic"
+	badgerdb "github.com/dgraph-io/badger/v3"
 	"github.com/mitchellh/go-homedir"
 	"github.com/spf13/cobra"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 
+	"github.com/dstotijn/edena/pkg/database/badger"
 	"github.com/dstotijn/edena/pkg/dns"
 	"github.com/dstotijn/edena/pkg/http"
 )
@@ -40,7 +48,8 @@ var serverCmd = &cobra.Command{
 	Use:   "server",
 	Short: "Runs a server for collecting and managing HTTP, SMTP and DNS traffic.",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		ctx := cmd.Context()
+		ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt)
+		defer stop()
 
 		logger, err := newLogger(debug, prettyPrint)
 		if err != nil {
@@ -85,6 +94,23 @@ var serverCmd = &cobra.Command{
 
 		tlsConfig := certmagicConfig.TLSConfig()
 
+		dbPath := path.Join(dataDir, "db")
+		dbLogger := logger.WithOptions(zap.IncreaseLevel(zapcore.WarnLevel)).
+			Named("database").
+			Sugar()
+
+		db, err := badger.OpenDatabase(
+			badgerdb.DefaultOptions(dbPath).WithLogger(badger.NewLogger(dbLogger)),
+		)
+		if err != nil {
+			return fmt.Errorf("failed to open database: %w", err)
+		}
+		defer func() {
+			if err := db.Close(); err != nil {
+				logger.Error("Failed to close database.", zap.Error(err))
+			}
+		}()
+
 		// Configure an http.Server, which orchestrates running HTTP and HTTPS servers.
 		// We're use HTTP and TLS for:
 		// - Capturing requests
@@ -95,6 +121,7 @@ var serverCmd = &cobra.Command{
 			http.WithTLSConfig(tlsConfig),
 			http.WithHTTPAddr(httpAddr),
 			http.WithTLSAddr(tlsAddr),
+			http.WithDatabase(db),
 			http.WithLogger(logger.Named("http")),
 		)
 
@@ -105,7 +132,7 @@ var serverCmd = &cobra.Command{
 
 		go func() {
 			if err := dnsServer.Run(ctx); err != nil {
-				log.Fatal(err)
+				log.Fatalf("Failed to run DNS server: %v", err)
 			}
 		}()
 
@@ -116,9 +143,37 @@ var serverCmd = &cobra.Command{
 			}
 		}()
 
-		if err := httpServer.Run(ctx); err != nil {
-			return err
-		}
+		go func() {
+			if err := httpServer.Run(ctx); err != nil {
+				log.Fatalf("Failed to run HTTP server(s): %v", err)
+			}
+		}()
+
+		// Wait for interrupt signal.
+		<-ctx.Done()
+
+		serverLogger.Info("Shutting down server. Press Ctrl+C to force quit.")
+
+		timeoutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		var wg sync.WaitGroup
+		wg.Add(2)
+
+		go func() {
+			if err := httpServer.Shutdown(timeoutCtx); err != nil {
+				serverLogger.Error("Failed to shutdown HTTP server(s).", zap.Error(err))
+			}
+			wg.Done()
+		}()
+		go func() {
+			if err := dnsServer.Shutdown(timeoutCtx); err != nil {
+				serverLogger.Error("Failed to shutdown DNS server.", zap.Error(err))
+			}
+			wg.Done()
+		}()
+
+		wg.Wait()
 
 		return nil
 	},

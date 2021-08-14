@@ -8,8 +8,10 @@ import (
 	"log"
 	"path"
 	"strings"
+	"sync"
 
 	"github.com/caddyserver/certmagic"
+	"github.com/hashicorp/go-multierror"
 	"github.com/libdns/libdns"
 	"github.com/miekg/dns"
 	"go.uber.org/zap"
@@ -32,6 +34,8 @@ type Server struct {
 	storage     certmagic.Storage
 	addr        string
 	soaHostname string
+	tcpServer   *dns.Server
+	udpServer   *dns.Server
 	logger      *zap.Logger
 }
 
@@ -77,28 +81,88 @@ func WithLogger(logger *zap.Logger) ServerOption {
 
 // Run starts the DNS server.
 func (srv *Server) Run(ctx context.Context) error {
+	var result *multierror.Error
+	var wg sync.WaitGroup
+	wg.Add(2)
+
 	srv.logger.Info(fmt.Sprintf("DNS server listening on %v ...", srv.addr))
+
 	go func() {
+		defer wg.Done()
+
 		dnsServer := &dns.Server{
 			Addr:      srv.addr,
 			Net:       "udp",
 			Handler:   srv,
 			ReusePort: true,
 		}
-		if err := dnsServer.ListenAndServe(); err != nil {
-			log.Fatalf("dns: server failed: %v", err)
+		srv.udpServer = dnsServer
+
+		err := dnsServer.ListenAndServe()
+		if err != nil && err != context.Canceled {
+			srv.logger.Error("DNS server (UDP) failed.", zap.Error(err))
+		}
+	}()
+	go func() {
+		defer wg.Done()
+
+		dnsServer := &dns.Server{
+			Addr:      srv.addr,
+			Net:       "tcp",
+			Handler:   srv,
+			ReusePort: true,
+		}
+		srv.tcpServer = dnsServer
+
+		err := dnsServer.ListenAndServe()
+		if err != nil && err != context.Canceled {
+			srv.logger.Error("DNS server (TCP) failed.", zap.Error(err))
 		}
 	}()
 
-	dnsServer := &dns.Server{
-		Addr:      srv.addr,
-		Net:       "tcp",
-		Handler:   srv,
-		ReusePort: true,
+	wg.Wait()
+
+	if result != nil && len(result.Errors) > 0 {
+		return fmt.Errorf("dns: failed to run servers: %w", result)
 	}
 
-	if err := dnsServer.ListenAndServe(); err != nil {
-		return fmt.Errorf("dns: server failed: %w", err)
+	return nil
+}
+
+func (srv *Server) Shutdown(ctx context.Context) error {
+	// We don't use the `errgroup` package, because we want to await *all*
+	// errors before returning.
+	var result *multierror.Error
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	go func() {
+		defer wg.Done()
+		if srv.tcpServer == nil {
+			return
+		}
+		err := srv.tcpServer.ShutdownContext(ctx)
+		if err != nil && err != context.DeadlineExceeded {
+			srv.logger.Error("Failed to shutdown DNS server (TCP).", zap.Error(err))
+			result = multierror.Append(result, err)
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		if srv.udpServer == nil {
+			return
+		}
+		err := srv.udpServer.ShutdownContext(ctx)
+		if err != nil && err != context.DeadlineExceeded {
+			srv.logger.Error("Failed to shutdown DNS server (UDP).", zap.Error(err))
+			result = multierror.Append(result, err)
+		}
+	}()
+
+	wg.Wait()
+
+	if result != nil && len(result.Errors) > 0 {
+		return fmt.Errorf("dns: failed to shutdown servers: %w", result)
 	}
 
 	return nil
