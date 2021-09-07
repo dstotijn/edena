@@ -102,3 +102,16 @@ func (srv *service) findHostByHostname(ctx context.Context, hostname string) (Ho
 
 	return host, nil
 }
+
+type ListHTTPLogEntriesParams struct {
+	HostIDs []ulid.ULID
+}
+
+func (srv *service) ListHTTPLogEntries(ctx context.Context, params ListHTTPLogEntriesParams) ([]HTTPLogEntry, error) {
+	hosts, err := srv.database.ListHTTPLogEntries(ctx, params)
+	if err != nil {
+		return nil, fmt.Errorf("hosts: failed to list HTTP log entries: %w", err)
+	}
+
+	return hosts, nil
+}

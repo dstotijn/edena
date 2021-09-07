@@ -13,6 +13,7 @@ var ulidEntropy = rand.New(rand.NewSource(time.Now().UnixNano()))
 type Service interface {
 	CreateHosts(ctx context.Context, amount int) ([]Host, error)
 	StoreHTTPLogEntry(ctx context.Context, params StoreHTTPLogEntryParams) error
+	ListHTTPLogEntries(ctx context.Context, params ListHTTPLogEntriesParams) ([]HTTPLogEntry, error)
 }
 
 type service struct {
@@ -27,6 +28,7 @@ type Database interface {
 	StoreHosts(ctx context.Context, hosts ...Host) error
 	StoreHTTPLogEntry(ctx context.Context, entry HTTPLogEntry) error
 	FindHostByHostname(ctx context.Context, hostname string) (Host, error)
+	ListHTTPLogEntries(ctx context.Context, params ListHTTPLogEntriesParams) ([]HTTPLogEntry, error)
 }
 
 func NewService(opts ...serviceOption) Service {

@@ -10,6 +10,7 @@ import (
 
 	"github.com/dgraph-io/badger/v3"
 	"github.com/dstotijn/edena/pkg/hosts"
+	"github.com/oklog/ulid"
 )
 
 const (
@@ -132,6 +133,8 @@ func (db *Database) FindHostByHostname(ctx context.Context, hostname string) (ho
 }
 
 type httpLogEntry struct {
+	ID          ulid.ULID
+	HostID      ulid.ULID
 	RawRequest  []byte
 	RawResponse []byte
 }
@@ -149,6 +152,8 @@ func (db *Database) StoreHTTPLogEntry(ctx context.Context, entry hosts.HTTPLogEn
 
 	buf := bytes.Buffer{}
 	err = gob.NewEncoder(&buf).Encode(httpLogEntry{
+		ID:          entry.ID,
+		HostID:      entry.HostID,
 		RawRequest:  rawReq,
 		RawResponse: rawRes,
 	})
@@ -182,6 +187,58 @@ func (db *Database) StoreHTTPLogEntry(ctx context.Context, entry hosts.HTTPLogEn
 	}
 
 	return nil
+}
+
+func (db *Database) ListHTTPLogEntries(ctx context.Context, params hosts.ListHTTPLogEntriesParams) ([]hosts.HTTPLogEntry, error) {
+	var httpLogEntries []hosts.HTTPLogEntry
+
+	err := db.badger.View(func(txn *badger.Txn) error {
+		var rawHTTPLogEntry []byte
+		opts := badger.DefaultIteratorOptions
+		opts.PrefetchValues = false
+		it := txn.NewIterator(opts)
+		defer it.Close()
+
+		for _, hostID := range params.HostIDs {
+			var hostIndexKey []byte
+			prefix := entryKey(httpLogKeyPrefix, httpLogHostIDIndex, hostID[:])
+
+			it.Rewind()
+
+			for it.Seek(prefix); it.ValidForPrefix(prefix); it.Next() {
+				hostIndexKey = it.Item().KeyCopy(hostIndexKey)
+
+				// The HTTP log entry ID starts *after* the first index byte
+				// and the 16 byte host ID.
+				httpLogEntryID := hostIndexKey[17:]
+
+				item, err := txn.Get(entryKey(httpLogKeyPrefix, 0, httpLogEntryID))
+				if err != nil {
+					return err
+				}
+
+				rawHTTPLogEntry, err = item.ValueCopy(rawHTTPLogEntry)
+				if err != nil {
+					return err
+				}
+
+				httpLogEntry := hosts.HTTPLogEntry{}
+				err = gob.NewDecoder(bytes.NewReader(rawHTTPLogEntry)).Decode(&httpLogEntry)
+				if err != nil {
+					return err
+				}
+
+				httpLogEntries = append(httpLogEntries, httpLogEntry)
+			}
+		}
+
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("badger: failed to commit transaction: %w", err)
+	}
+
+	return httpLogEntries, nil
 }
 
 func entryKey(prefix, indexKey byte, indexValue []byte) []byte {
