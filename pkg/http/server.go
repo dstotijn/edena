@@ -4,50 +4,37 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
-	"io"
-	"math/rand"
 	"net/http"
 	"sync"
-	"time"
 
 	"github.com/caddyserver/certmagic"
+	"github.com/dstotijn/edena/pkg/hosts"
 	"github.com/hashicorp/go-multierror"
-	"github.com/oklog/ulid"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
 
 // Server represents a server for HTTP and TLS.
 type Server struct {
-	acmeManager *certmagic.ACMEManager
-	httpAddr    string
-	tlsAddr     string
-	tlsDisabled bool
-	tlsConfig   *tls.Config
-	httpServer  *http.Server
-	tlsServer   *http.Server
-	database    Database
-	ulidEntropy *sync.Pool
-	logger      *zap.Logger
+	hostsService hosts.Service
+	hostname     string
+	acmeManager  *certmagic.ACMEManager
+	httpAddr     string
+	tlsAddr      string
+	tlsDisabled  bool
+	tlsConfig    *tls.Config
+	httpServer   *http.Server
+	tlsServer    *http.Server
+	logger       *zap.Logger
 }
 
 type ServerOption func(*Server)
-
-type Database interface {
-	StoreHTTPLogEntry(ctx context.Context, entry LogEntry) error
-}
 
 func NewServer(opts ...ServerOption) *Server {
 	srv := &Server{
 		httpAddr: ":80",
 		tlsAddr:  ":443",
-		ulidEntropy: &sync.Pool{
-			New: func() interface{} {
-				t := time.Now()
-				return ulid.Monotonic(rand.New(rand.NewSource(t.UnixNano())), 0)
-			},
-		},
-		logger: zap.NewNop(),
+		logger:   zap.NewNop(),
 	}
 
 	for _, opt := range opts {
@@ -55,6 +42,21 @@ func NewServer(opts ...ServerOption) *Server {
 	}
 
 	return srv
+}
+
+// WithHostsService sets the hosts.Service used for managing hosts, e.g.
+// creating new hosts and capturing network traffic received on them.
+func WithHostsService(svc hosts.Service) ServerOption {
+	return func(srv *Server) {
+		srv.hostsService = svc
+	}
+}
+
+// WithHostname sets the hostname used to serve the API.
+func WithHostname(hostname string) ServerOption {
+	return func(srv *Server) {
+		srv.hostname = hostname
+	}
 }
 
 // WithHTTPAddr overrides the default TCP address for the HTTP server to listen on.
@@ -98,14 +100,6 @@ func WithoutTLS() ServerOption {
 func WithLogger(logger *zap.Logger) ServerOption {
 	return func(srv *Server) {
 		srv.logger = logger
-	}
-}
-
-// WithDatabase provides a database, which is used for logging HTTP requests
-// and responses.
-func WithDatabase(db Database) ServerOption {
-	return func(srv *Server) {
-		srv.database = db
 	}
 }
 
@@ -220,14 +214,4 @@ func (srv *Server) Shutdown(ctx context.Context) error {
 	}
 
 	return nil
-}
-
-func (srv *Server) mustNewULID(t time.Time) (ulid.ULID, func()) {
-	entropy := srv.ulidEntropy.Get().(io.Reader)
-	ulid := ulid.MustNew(ulid.Timestamp(t), entropy)
-	fn := func() {
-		srv.ulidEntropy.Put(entropy)
-	}
-
-	return ulid, fn
 }

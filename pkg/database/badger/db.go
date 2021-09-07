@@ -4,17 +4,22 @@ import (
 	"bytes"
 	"context"
 	"encoding/gob"
+	"errors"
 	"fmt"
+	"net/http/httputil"
 
 	"github.com/dgraph-io/badger/v3"
-
-	"github.com/dstotijn/edena/pkg/http"
+	"github.com/dstotijn/edena/pkg/hosts"
 )
 
 const (
-	httpLogKeyPrefix   byte = 0x80 // HTTP log entries have first key bit set to 1
-	httpLogHostIDIndex byte = 0x81 // Used to index HTTP logs by "host ID"
-	indexKeyMask       byte = 0x0F // Secondary index keys use the last 4 bits
+	hostKeyPrefix     byte = 0x00
+	hostHostnameIndex byte = 0x01
+
+	httpLogKeyPrefix   byte = 0x10
+	httpLogHostIDIndex byte = 0x11
+
+	indexKeyMask byte = 0x0F // Secondary index keys use the last 4 bits
 )
 
 type Database struct {
@@ -34,9 +39,119 @@ func (db *Database) Close() error {
 	return db.badger.Close()
 }
 
-func (db *Database) StoreHTTPLogEntry(ctx context.Context, entry http.LogEntry) error {
+func (db *Database) StoreHosts(ctx context.Context, hosts ...hosts.Host) error {
+	if len(hosts) == 0 {
+		return errors.New("badger: hosts cannot be 0 length")
+	}
+
+	entries := make([]*badger.Entry, 0, len(hosts)*2)
+	for _, host := range hosts {
+		buf := bytes.Buffer{}
+		err := gob.NewEncoder(&buf).Encode(host)
+		if err != nil {
+			return fmt.Errorf("badger: failed to encode host: %w", err)
+		}
+		entries = append(entries,
+			// Host itself
+			&badger.Entry{
+				Key:   entryKey(hostKeyPrefix, 0, host.ID[:]),
+				Value: buf.Bytes(),
+			},
+			// Hostname index
+			&badger.Entry{
+				Key: entryKey(hostKeyPrefix, hostHostnameIndex, append([]byte(host.Hostname+"#"), host.ID[:]...)),
+			},
+		)
+	}
+
+	err := db.badger.Update(func(txn *badger.Txn) error {
+		for i := range entries {
+			err := txn.SetEntry(entries[i])
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("badger: failed to commit transaction: %w", err)
+	}
+
+	return nil
+}
+
+func (db *Database) FindHostByHostname(ctx context.Context, hostname string) (hosts.Host, error) {
+	var rawHost []byte
+
+	err := db.badger.View(func(txn *badger.Txn) error {
+		var hostIndexKey []byte
+
+		prefix := entryKey(hostKeyPrefix, hostHostnameIndex, []byte(hostname+"#"))
+		opts := badger.DefaultIteratorOptions
+		opts.PrefetchValues = false
+		it := txn.NewIterator(opts)
+		defer it.Close()
+
+		for it.Seek(prefix); it.ValidForPrefix(prefix); it.Next() {
+			hostIndexKey = it.Item().KeyCopy(hostIndexKey)
+			break
+		}
+		if hostIndexKey == nil {
+			return hosts.ErrHostNotFound
+		}
+
+		// The host ID is the part of the index item key *after* the `#`.
+		hostID := hostIndexKey[bytes.Index(hostIndexKey, []byte("#"))+1:]
+
+		item, err := txn.Get(entryKey(hostKeyPrefix, 0, hostID))
+		if err != nil {
+			return err
+		}
+
+		rawHost, err = item.ValueCopy(nil)
+		if err != nil {
+			return err
+		}
+
+		return nil
+	})
+	if err == hosts.ErrHostNotFound || err == badger.ErrKeyNotFound {
+		return hosts.Host{}, hosts.ErrHostNotFound
+	}
+	if err != nil {
+		return hosts.Host{}, fmt.Errorf("badger: failed to commit transaction: %w", err)
+	}
+
+	host := hosts.Host{}
+	err = gob.NewDecoder(bytes.NewReader(rawHost)).Decode(&host)
+	if err != nil {
+		return hosts.Host{}, fmt.Errorf("badger: failed to decode host: %w", err)
+	}
+
+	return host, nil
+}
+
+type httpLogEntry struct {
+	RawRequest  []byte
+	RawResponse []byte
+}
+
+func (db *Database) StoreHTTPLogEntry(ctx context.Context, entry hosts.HTTPLogEntry) error {
+	rawReq, err := httputil.DumpRequest(entry.Request, true)
+	if err != nil {
+		return fmt.Errorf("badger: failed to dump HTTP request: %w", err)
+	}
+
+	rawRes, err := httputil.DumpResponse(entry.Response, true)
+	if err != nil {
+		return fmt.Errorf("badger: failed to dump HTTP request: %w", err)
+	}
+
 	buf := bytes.Buffer{}
-	err := gob.NewEncoder(&buf).Encode(entry)
+	err = gob.NewEncoder(&buf).Encode(httpLogEntry{
+		RawRequest:  rawReq,
+		RawResponse: rawRes,
+	})
 	if err != nil {
 		return fmt.Errorf("badger: failed to encode log entry: %w", err)
 	}

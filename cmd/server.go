@@ -20,6 +20,7 @@ import (
 
 	"github.com/dstotijn/edena/pkg/database/badger"
 	"github.com/dstotijn/edena/pkg/dns"
+	"github.com/dstotijn/edena/pkg/hosts"
 	"github.com/dstotijn/edena/pkg/http"
 )
 
@@ -90,7 +91,7 @@ var serverCmd = &cobra.Command{
 			},
 		})
 
-		certmagicConfig.Issuers = append(certmagicConfig.Issuers, acmeManager)
+		certmagicConfig.Issuers = []certmagic.Issuer{acmeManager}
 
 		tlsConfig := certmagicConfig.TLSConfig()
 
@@ -111,17 +112,26 @@ var serverCmd = &cobra.Command{
 			}
 		}()
 
+		// Configure hosts.Service, which is used to maintain hosts and store
+		// network interactions.
+		hostsService := hosts.NewService(
+			hosts.WithBaseHostname(hostname),
+			hosts.WithDatabase(db),
+			hosts.WithLogger(logger.Named("hosts")),
+		)
+
 		// Configure an http.Server, which orchestrates running HTTP and HTTPS servers.
 		// We're use HTTP and TLS for:
 		// - Capturing requests
 		// - API and Web UI
 		// - Solving ACME challenges (HTTP-01 and TLS-ALPN)
 		httpServer := http.NewServer(
+			http.WithHostname(hostname),
 			http.WithACMEManager(acmeManager),
 			http.WithTLSConfig(tlsConfig),
 			http.WithHTTPAddr(httpAddr),
 			http.WithTLSAddr(tlsAddr),
-			http.WithDatabase(db),
+			http.WithHostsService(hostsService),
 			http.WithLogger(logger.Named("http")),
 		)
 
@@ -151,6 +161,8 @@ var serverCmd = &cobra.Command{
 
 		// Wait for interrupt signal.
 		<-ctx.Done()
+		// Restore signal, allowing "force quit".
+		stop()
 
 		serverLogger.Info("Shutting down server. Press Ctrl+C to force quit.")
 
