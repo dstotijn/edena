@@ -125,6 +125,7 @@ var serverCmd = &cobra.Command{
 		// - Capturing requests
 		// - API and Web UI
 		// - Solving ACME challenges (HTTP-01 and TLS-ALPN)
+		httpLogger := logger.Named("http")
 		httpServer := http.NewServer(
 			http.WithHostname(hostname),
 			http.WithACMEManager(acmeManager),
@@ -132,7 +133,7 @@ var serverCmd = &cobra.Command{
 			http.WithHTTPAddr(httpAddr),
 			http.WithTLSAddr(tlsAddr),
 			http.WithHostsService(hostsService),
-			http.WithLogger(logger.Named("http")),
+			http.WithLogger(httpLogger),
 		)
 
 		serverLogger.Info("Running Edena ...",
@@ -149,13 +150,13 @@ var serverCmd = &cobra.Command{
 		go func() {
 			err := certmagicConfig.ManageAsync(ctx, []string{hostname, "*." + hostname})
 			if err != nil {
-				log.Printf("Failed to obtain wildcard certificate: %v", err)
+				certmagicLogger.Error("Failed to obtain wildcard certificate: %v", zap.Error(err))
 			}
 		}()
 
 		go func() {
 			if err := httpServer.Run(ctx); err != nil {
-				log.Fatalf("Failed to run HTTP server(s): %v", err)
+				httpLogger.Fatal("Failed to run HTTP server(s): %v", zap.Error(err))
 			}
 		}()
 

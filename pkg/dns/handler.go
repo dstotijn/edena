@@ -2,10 +2,10 @@ package dns
 
 import (
 	"context"
-	"log"
 
 	"github.com/libdns/libdns"
 	"github.com/miekg/dns"
+	"go.uber.org/zap"
 )
 
 func (srv *Server) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
@@ -21,7 +21,7 @@ func (srv *Server) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 	defer func() {
 		err := w.WriteMsg(reply)
 		if err != nil {
-			log.Printf("Error: Failed to write DNS reply: %v", err)
+			srv.logger.Error("Failed to write DNS reply.", zap.Error(err))
 		}
 	}()
 
@@ -63,14 +63,17 @@ func (srv *Server) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 	default:
 		recs, err := srv.GetRecords(ctx, name)
 		if err != nil {
-			log.Printf("Error: Failed to get records for zone %q: %v", name, err)
+			srv.logger.Error("Failed to get records for zone.",
+				zap.String("name", name),
+				zap.Error(err),
+			)
 			return
 		}
 		for _, rec := range recs {
 			if _, ok := dns.StringToType[rec.Type]; ok {
 				rr, err := MessageFromRecord(name, rec)
 				if err != nil {
-					log.Printf("Error: Failed to parse message from record: %v", err)
+					srv.logger.Error("Failed to parse message from record.", zap.Error(err))
 					return
 				}
 				reply.Answer = append(reply.Answer, rr)
