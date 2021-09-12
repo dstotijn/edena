@@ -8,7 +8,11 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"net"
 	"net/http"
+	"os"
+	"strings"
+	"time"
 
 	"github.com/gorilla/mux"
 	"github.com/oklog/ulid"
@@ -26,9 +30,13 @@ func (srv *Server) Handler() http.Handler {
 		r.Use(srv.acmeManager.HTTPChallengeHandler)
 	}
 
-	apiRouter := r.Host(srv.hostname).PathPrefix("/api").Subrouter().StrictSlash(true)
-	apiRouter.Methods("POST").Path("/hosts").HandlerFunc(srv.CreateHosts)
-	apiRouter.Methods("GET").Path("/http-logs").HandlerFunc(srv.ListHTTPLogEntries)
+	apiRouter := r.MatcherFunc(func(req *http.Request, match *mux.RouteMatch) bool {
+		hostname, _ := os.Hostname()
+		host, _, _ := net.SplitHostPort(req.Host)
+		return strings.EqualFold(host, hostname) || (req.Host == srv.hostname || req.Host == "localhost:8080")
+	}).PathPrefix("/api").Subrouter().StrictSlash(true)
+	apiRouter.Methods("POST").Path("/hosts/").HandlerFunc(srv.CreateHosts)
+	apiRouter.Methods("GET").Path("/http-logs/").HandlerFunc(srv.ListHTTPLogEntries)
 
 	r.PathPrefix("").HandlerFunc(srv.CaptureRequest)
 
@@ -161,17 +169,20 @@ func parseHostIDs(rawIDs []string) ([]ulid.ULID, *APIError) {
 }
 
 type httpLogEntry struct {
-	ID       ulid.ULID    `json:"id"`
-	HostID   ulid.ULID    `json:"hostId"`
-	Request  httpRequest  `json:"request"`
-	Response httpResponse `json:"response"`
+	ID        ulid.ULID    `json:"id"`
+	HostID    ulid.ULID    `json:"hostId"`
+	Request   httpRequest  `json:"request"`
+	Response  httpResponse `json:"response"`
+	CreatedAt time.Time    `json:"createdAt"`
 }
 
 type httpRequest struct {
+	Host    string      `json:"host"`
 	URL     string      `json:"url"`
 	Method  string      `json:"method"`
 	Headers http.Header `json:"headers"`
 	Body    []byte      `json:"body"`
+	Raw     []byte      `json:"raw"`
 }
 
 type httpResponse struct {
@@ -179,6 +190,7 @@ type httpResponse struct {
 	Status     string      `json:"status"`
 	Headers    http.Header `json:"headers"`
 	Body       []byte      `json:"body"`
+	Raw        []byte      `json:"raw"`
 }
 
 func (srv *Server) ListHTTPLogEntries(w http.ResponseWriter, r *http.Request) {
@@ -243,16 +255,20 @@ func parseHTTPLogEntry(log hosts.HTTPLogEntry) (httpLogEntry, error) {
 		ID:     log.ID,
 		HostID: log.HostID,
 		Request: httpRequest{
+			Host:    req.Host,
 			URL:     req.URL.String(),
 			Method:  req.Method,
 			Headers: req.Header,
 			Body:    reqBody,
+			Raw:     log.RawRequest,
 		},
 		Response: httpResponse{
 			StatusCode: res.StatusCode,
 			Status:     res.Status,
 			Headers:    res.Header,
 			Body:       resBody,
+			Raw:        log.RawResponse,
 		},
+		CreatedAt: ulid.Time(log.ID.Time()).UTC(),
 	}, nil
 }
