@@ -1,8 +1,10 @@
 import type { NextPage } from "next";
 import { useRouter } from "next/router";
 import useSWR from "swr";
+
 import { HttpLogDetail } from "../components/http-logs/HttpLogDetail";
 import { HttpLogListItem } from "../components/http-logs/HttpLogListItem";
+import { HostsNav } from "../components/HostsNav";
 
 async function fetcher(...args: Parameters<typeof fetch>): Promise<any> {
   const res = await fetch(...args);
@@ -39,7 +41,7 @@ type HttpLogsData = {
 const HttpLogs: NextPage = () => {
   const router = useRouter();
   const { hostId, id } = router.query;
-  const { data, error } = useSWR<HttpLogsData, any>(
+  const { data: d, error } = useSWR<HttpLogsData, any>(
     ["/api/http-logs/", hostId],
     (url, hostId) => {
       if (!hostId) {
@@ -48,32 +50,35 @@ const HttpLogs: NextPage = () => {
       return fetcher(`${url}?${new URLSearchParams({ hostId })}`);
     }
   );
+  const data = d?.data;
 
-  if (error) {
-    return <div>Failed to load: {error.message}</div>;
-  }
-  if (!data) {
-    return <div>Loading ...</div>;
-  }
-
-  const logEntry = data.data.find((logEntry) => logEntry.id === id);
-  if (!logEntry) {
-    return <div>Log entry not found.</div>;
-  }
-
-  return (
+  const logEntry = data?.find((logEntry) => logEntry.id === id);
+  const logs = (
     <div className="flex divide-x">
       <div className="flex-shrink-0 w-1/4">
         <ul className="divide-y">
-          {data.data.map((logEntry) => (
+          {data?.map((logEntry) => (
             <HttpLogListItem key={logEntry.id} httpLogEntry={logEntry} />
           ))}
         </ul>
       </div>
       <div className="flex-auto p-8">
-        <HttpLogDetail httpLogEntry={logEntry} />
+        {logEntry && <HttpLogDetail httpLogEntry={logEntry} />}
+        {data && data.length > 0 && !id && <p>Select a log entry...</p>}
+        {id && !logEntry && <p>Log entry not found.</p>}
       </div>
     </div>
+  );
+
+  return (
+    <>
+      <HostsNav />
+      <main className="clear-both">
+        {error && <div className="p-6">Failed to load: {error.message}</div>}
+        {!(data || error) && <div className="p-6">Loading ...</div>}
+        {data && logs}
+      </main>
+    </>
   );
 };
 
