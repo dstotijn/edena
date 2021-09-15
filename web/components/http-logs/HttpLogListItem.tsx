@@ -2,7 +2,7 @@ import { DateTime } from "luxon";
 import Link from "next/link";
 import { useRouter } from "next/router";
 
-import { HttpLogEntry } from "../../pages/http-logs";
+import { HttpLogEntry } from "../../types/HttpLogEntry";
 
 type Props = {
   httpLogEntry: HttpLogEntry;
@@ -22,7 +22,7 @@ export function HttpLogListItem({ httpLogEntry }: Props): JSX.Element {
   const createdAt = DateTime.fromISO(httpLogEntry.createdAt);
 
   return (
-    <li className={selectedItem ? "bg-indigo-50" : ""}>
+    <li className={selectedItem ? "bg-primary bg-opacity-5" : ""}>
       <Link href={url}>
         <a className="block px-6 py-4">
           <h3 className="font-bold">
