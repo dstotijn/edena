@@ -5,6 +5,7 @@ import (
 	"math/rand"
 	"time"
 
+	"github.com/oklog/ulid"
 	"go.uber.org/zap"
 )
 
@@ -12,6 +13,7 @@ var ulidEntropy = rand.New(rand.NewSource(time.Now().UnixNano()))
 
 type Service interface {
 	CreateHosts(ctx context.Context, amount int) ([]Host, error)
+	FindHostByID(ctx context.Context, hostID ulid.ULID) (Host, error)
 	StoreHTTPLogEntry(ctx context.Context, params StoreHTTPLogEntryParams) error
 	ListHTTPLogEntries(ctx context.Context, params ListHTTPLogEntriesParams) ([]HTTPLogEntry, error)
 }
@@ -27,6 +29,7 @@ type serviceOption func(*service)
 type Database interface {
 	StoreHosts(ctx context.Context, hosts ...Host) error
 	StoreHTTPLogEntry(ctx context.Context, entry HTTPLogEntry) error
+	FindHostByID(ctx context.Context, hostID ulid.ULID) (Host, error)
 	FindHostByHostname(ctx context.Context, hostname string) (Host, error)
 	ListHTTPLogEntries(ctx context.Context, params ListHTTPLogEntriesParams) ([]HTTPLogEntry, error)
 }

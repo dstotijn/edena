@@ -12,7 +12,7 @@ type Response = {
 
 export function useHttpLogs(hostId?: string): { httpLogs?: HttpLogEntry[]; error: any } {
   const { data, error } = useSWR<Response | undefined, any>(
-    ["/api/http-logs/", hostId],
+    ["/api/http-logs", hostId],
     (url: string, hostId: string) => {
       if (!hostId) {
         return;

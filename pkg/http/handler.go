@@ -35,8 +35,9 @@ func (srv *Server) Handler() http.Handler {
 		host, _, _ := net.SplitHostPort(req.Host)
 		return strings.EqualFold(host, hostname) || (req.Host == srv.hostname || req.Host == "localhost:8080")
 	}).PathPrefix("/api").Subrouter().StrictSlash(true)
-	apiRouter.Methods("POST").Path("/hosts/").HandlerFunc(srv.CreateHosts)
-	apiRouter.Methods("GET").Path("/http-logs/").HandlerFunc(srv.ListHTTPLogEntries)
+	apiRouter.Methods("POST").Path("/hosts").HandlerFunc(srv.CreateHosts)
+	apiRouter.Methods("GET").Path("/hosts/{id:\\w{26}}").HandlerFunc(srv.GetHostByID)
+	apiRouter.Methods("GET").Path("/http-logs").HandlerFunc(srv.ListHTTPLogEntries)
 
 	r.PathPrefix("").HandlerFunc(srv.CaptureRequest)
 
@@ -130,6 +131,46 @@ func (srv *Server) CreateHosts(w http.ResponseWriter, r *http.Request) {
 		StatusCode: http.StatusCreated,
 		Data:       hosts,
 	})
+}
+
+type host struct {
+	ID        ulid.ULID `json:"id"`
+	Hostname  string    `json:"hostname"`
+	CreatedAt time.Time `json:"createdAt"`
+}
+
+func (srv *Server) GetHostByID(w http.ResponseWriter, r *http.Request) {
+	hostID, err := ulid.Parse(mux.Vars(r)["id"])
+	if err != nil {
+		writeAPIError(w, &APIError{
+			Message:    fmt.Sprintf("Failed to parse host ID: %v", err),
+			StatusCode: http.StatusBadRequest,
+			Err:        err,
+		})
+		return
+	}
+
+	h, err := srv.hostsService.FindHostByID(r.Context(), hostID)
+	switch {
+	case errors.Is(err, hosts.ErrHostNotFound):
+		writeAPIError(w, &APIError{
+			Message:    fmt.Sprintf("Host %q not found.", hostID),
+			StatusCode: http.StatusNotFound,
+			Err:        err,
+		})
+	case err != nil:
+		srv.logger.Error("Failed to find host by ID.", zap.Error(err))
+		srv.handleInternalError(w)
+	default:
+		writeAPIResponse(w, APIResponse{
+			StatusCode: http.StatusOK,
+			Data: host{
+				ID:        h.ID,
+				Hostname:  h.Hostname,
+				CreatedAt: ulid.Time(h.ID.Time()).UTC(),
+			},
+		})
+	}
 }
 
 func parseHostIDs(rawIDs []string) ([]ulid.ULID, *APIError) {

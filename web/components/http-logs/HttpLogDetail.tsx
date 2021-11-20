@@ -15,10 +15,7 @@ export function HttpLogDetail({ httpLogEntry }: Props): JSX.Element {
         {httpLogEntry.request.method} {httpLogEntry.request.url}
       </h1>
 
-      <p className="float-right mb-4">
-        <span className="font-bold">Host:</span> {httpLogEntry.request.host}
-      </p>
-      <p className="mb-4 clear-both">
+      <p className="mb-4 clear-left">
         {createdAt.toLocaleString(DateTime.DATETIME_MED_WITH_SECONDS)}
         <span className="text-gray-400 ml-4">{createdAt.toRelative()}</span>
       </p>

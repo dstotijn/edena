@@ -7,7 +7,7 @@ type Props = {
 
 export function NavBar({ children }: Props): JSX.Element {
   return (
-    <header className="float-left w-full pl-6 pb-4 border-b">
+    <header className="float-left pl-6 pb-4">
       <Link href="/">
         <a>
           <h1 className="float-left text-primary text-4xl font-bold">Edena</h1>

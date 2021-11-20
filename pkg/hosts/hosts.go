@@ -19,8 +19,8 @@ const hostHashLength = 4
 var ErrHostNotFound = errors.New("host not found")
 
 type Host struct {
-	ID       ulid.ULID `json:"id"`
-	Hostname string    `json:"hostname"`
+	ID       ulid.ULID
+	Hostname string
 }
 
 type HTTPLogEntry struct {
@@ -54,6 +54,15 @@ func (srv *service) CreateHosts(ctx context.Context, amount int) ([]Host, error)
 	}
 
 	return hosts, nil
+}
+
+func (srv *service) FindHostByID(ctx context.Context, hostID ulid.ULID) (Host, error) {
+	host, err := srv.database.FindHostByID(ctx, hostID)
+	if err != nil {
+		return Host{}, fmt.Errorf("hosts: failed to find host by ID: %w", err)
+	}
+
+	return host, nil
 }
 
 type StoreHTTPLogEntryParams struct {

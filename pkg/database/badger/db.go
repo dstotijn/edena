@@ -81,6 +81,38 @@ func (db *Database) StoreHosts(ctx context.Context, hosts ...hosts.Host) error {
 	return nil
 }
 
+func (db *Database) FindHostByID(ctx context.Context, hostID ulid.ULID) (hosts.Host, error) {
+	var rawHost []byte
+
+	err := db.badger.View(func(txn *badger.Txn) error {
+		item, err := txn.Get(entryKey(hostKeyPrefix, 0, hostID[:]))
+		if err != nil {
+			return err
+		}
+
+		rawHost, err = item.ValueCopy(nil)
+		if err != nil {
+			return err
+		}
+
+		return nil
+	})
+	if err == badger.ErrKeyNotFound {
+		return hosts.Host{}, hosts.ErrHostNotFound
+	}
+	if err != nil {
+		return hosts.Host{}, fmt.Errorf("badger: failed to commit transaction: %w", err)
+	}
+
+	host := hosts.Host{}
+	err = gob.NewDecoder(bytes.NewReader(rawHost)).Decode(&host)
+	if err != nil {
+		return hosts.Host{}, fmt.Errorf("badger: failed to decode host: %w", err)
+	}
+
+	return host, nil
+}
+
 func (db *Database) FindHostByHostname(ctx context.Context, hostname string) (hosts.Host, error) {
 	var rawHost []byte
 

@@ -5,31 +5,42 @@ import { useRouter } from "next/router";
 import React from "react";
 
 import { HostsNav } from "../components/HostsNav";
+import { useHost } from "../hooks/useHost";
 import { useHttpLogs } from "../hooks/useHttpLogs";
 
 const Host: NextPage = () => {
   const router = useRouter();
   const { hostId } = router.query;
+  const { host, error } = useHost(hostId as string | undefined);
+  const createdAt = host && DateTime.fromISO(host.createdAt);
 
   return (
     <>
       <HostsNav />
       <main className="p-6 clear-both">
-        <HttpLogs hostId={hostId as string} />
+        {error && (
+          <p>
+            Failed to load host: <em>{error.message}</em>
+          </p>
+        )}
+        {!error && <h1 className="text-3xl font-bold mb-4">{host?.hostname}</h1>}
+        {createdAt && <p className="mb-4">Created: {createdAt.toLocaleString(DateTime.DATETIME_MED_WITH_SECONDS)}</p>}
+        <p className="mb-8">
+          <Link href={{ pathname: "/http-logs", query: { hostId } }}>
+            <a className="text-link">← Back to hosts</a>
+          </Link>
+        </p>
+        <HttpLogs hostId={hostId as string | undefined} />
       </main>
     </>
   );
 };
 
-function HttpLogs({ hostId }: { hostId: string }): JSX.Element {
+function HttpLogs({ hostId }: { hostId?: string }): JSX.Element {
   const { httpLogs, error } = useHttpLogs(hostId);
   const httpLogCount = httpLogs?.length || 0;
   const latestLog = httpLogs?.length ? httpLogs[httpLogs.length - 1] : undefined;
   const latestLogCreatedAt = latestLog ? DateTime.fromISO(latestLog.createdAt) : undefined;
-
-  <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 5l7 7m0 0l-7 7m7-7H3" />
-  </svg>;
 
   return (
     <>
